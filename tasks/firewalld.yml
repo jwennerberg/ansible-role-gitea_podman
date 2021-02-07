@@ -1,0 +1,24 @@
+---
+- name: Ensure firewalld is installed
+  ansible.builtin.package:
+    name: firewalld
+    state: installed
+  tags: firewalld
+
+- name: Ensure firewalld is running
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: true
+  tags: firewalld
+
+- name: Open exposed ports in firewalld
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - "{{ gitea_http_port }}/tcp"
+    - "{{ gitea_ssh_port }}/tcp"
+  tags: firewalld

@@ -1,0 +1,138 @@
+---
+- name: Create gitea group
+  ansible.builtin.group:
+    name: "{{ gitea_group }}"
+  tags: gitea_user
+
+- name: Create gitea user
+  ansible.builtin.user:
+    name: "{{ gitea_user }}"
+    group: "{{ gitea_group }}"
+  register: gitea_user_info
+  tags: gitea_user
+
+- name: Create data and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ gitea_user }}"
+    group: "{{ gitea_group }}"
+    mode: 0770
+  loop:
+    - "{{ gitea_data_dir }}"
+    - "{{ gitea_config_dir }}"
+
+- name: Ensure podman is installed
+  ansible.builtin.package:
+    name: podman
+    state: installed
+
+- name: Pull gitea container image
+  containers.podman.podman_image:
+    name: "{{ gitea_container_image }}"
+    tag: "{{ gitea_container_image_tag }}"
+  become: true
+  become_user: "{{ gitea_user }}"
+
+#- name: Check if app.ini exist
+#  ansible.builtin.stat:
+#    path: "{{ gitea_config_dir }}/app.ini"o
+#  register: gitea_app_ini
+
+- name: Check existing secret_key
+  ansible.builtin.shell:
+    cmd: "grep ^SECRET_KEY {{ gitea_config_dir }}/app.ini | awk '{print $3}'"
+  no_log: true
+  changed_when: false
+  become: true
+  become_user: "{{ gitea_user }}"
+  when: gitea_secret_key is undefined
+  register: gitea_secret_key_existing
+
+- name: Set existing secret_key fact
+  ansible.builtin.set_fact:
+    gitea_secret_key: "{{ gitea_secret_key_existing.stdout }}"
+  no_log: true
+  when:
+    - gitea_secret_key is undefined
+    - gitea_secret_key_existing.stdout != ""
+
+- name: Set default secret_key fact
+  ansible.builtin.set_fact:
+    gitea_secret_key: "{{ lookup('password', '/dev/null length=64 chars=ascii_letters') }}"
+  no_log: true
+  when:
+    - gitea_secret_key is undefined
+    - gitea_secret_key_existing.stdout == ""
+
+- name: Create gitea container
+  containers.podman.podman_container:
+    name: gitea
+    image: "{{ gitea_container_image }}:{{ gitea_container_image_tag }}"
+    volumes:
+      - "{{ gitea_data_dir }}:/var/lib/gitea:Z"
+      - "{{ gitea_config_dir }}:/etc/gitea:Z"
+    ports:
+      - "{{ gitea_http_port }}"
+      - "{{ gitea_ssh_port }}"
+    env:
+      ROOT_URL: "{{ gitea_root_url }}"
+      HTTP_PORT: "{{ gitea_http_port }}"
+      SSH_DOMAIN: "{{ gitea_ssh_domain }}"
+      SSH_PORT: "{{ gitea_ssh_port }}"
+      SSH_LISTEN_PORT: "{{ gitea_ssh_port }}"
+      SECRET_KEY: "{{ gitea_secret_key }}"
+      INSTALL_LOCK: true
+    hostname: gitea.localhost
+    user: "{{ gitea_user_info.uid }}"
+    state: present
+  become: true
+  become_user: "{{ gitea_user }}"
+
+- name: Prepare systemd files
+  ansible.builtin.file:
+    state: directory
+    path: "~/.config/systemd/user"
+    mode: 0755
+  become: true
+  become_user: "{{ gitea_user }}"
+  tags: systemd
+
+- name: Check if user is lingering
+  ansible.builtin.stat:
+    path: "/var/lib/systemd/linger/{{ gitea_user }}"
+  register: user_lingering
+  when: gitea_user != "root"
+  tags: systemd
+
+- name: Enable lingering is needed
+  ansible.builtin.command: "loginctl enable-linger {{ gitea_user }}"
+  when:
+    - gitea_user != "root"
+    - not user_lingering.stat.exists
+  tags: systemd
+
+- name: Generate podman systemd service file
+  ansible.builtin.command:
+    cmd: "podman generate systemd --new --files --name gitea"
+    chdir: "~/.config/systemd/user"
+    #creates: "~/.config/systemd/user/container-gitea.service"
+  become: true
+  become_user: "{{ gitea_user }}"
+  tags: systemd
+
+- name: Start and enable systemd service
+  ansible.builtin.systemd:
+    name: container-gitea.service
+    daemon_reload: true
+    scope: user
+    state: started
+    enabled: true
+  become: true
+  become_user: "{{ gitea_user }}"
+  tags: systemd
+
+- name: Open firewall ports
+  ansible.builtin.include_tasks:
+    file: tasks/firewalld.yml
+  when: gitea_manage_firewall_firewalld | bool
