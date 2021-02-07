@@ -3,6 +3,10 @@ gitea_podman
 
 Deploy a simple non-production Gitea instance as a (rootless) container with Podman
 
+Requirements
+------------
+* Ansible 2.9 and later
+
 Role Variables
 --------------
 
@@ -49,6 +53,13 @@ Role Variables
 **gitea_manage_firewall_firewalld** - Boolean for role to manage firewall ports with firewalld
 
 *Default:* `true`
+
+Dependencies
+------------
+
+collections:
+* [containers.podman](https://galaxy.ansible.com/containers/podman)
+* [ansible.posix](https://galaxy.ansible.com/ansible/posix)
 
 License
 -------
